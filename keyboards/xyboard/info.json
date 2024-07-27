@@ -1,0 +1,16 @@
+{
+    "manufacturer": "aneeshdurg",
+    "url": "https://aneeshdurg.me",
+    "maintainer": "aneeshdurg",
+    "usb": {
+        "vid": "0xDEAD",
+        "device_version": "1.0.0"
+    },
+    "development_board": "elite_c",
+    "split": {
+        "enabled": true
+    },
+    "build": {
+        "lto": true
+    }
+}
