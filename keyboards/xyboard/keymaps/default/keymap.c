@@ -100,8 +100,6 @@ void matrix_init_user(void) {
     setPinInputHigh(C7);
 }
 
-#define MAKE_EVENT(row_num, col_num, press, event_type) ((keyevent_t){.key = MAKE_KEYPOS((row_num), (col_num)), .pressed = (press), .time = timer_read(), .type = (event_type)})
-
 int x, y;
 int sw_state = false;
 keyrecord_t record;
@@ -121,18 +119,22 @@ void matrix_scan_user(void) {
             if (x == 0 && y == 0) {
                 record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
                 js_keycode = LOL;
-                // process_action(&record, action_for_keycode(js_keycode));
                 process_record_user(js_keycode, &record);
                 had_js_event = true;
             } else if (x == 507 && y == 514) {
                 if (had_js_event) {
                     record.event.pressed = false;
                     process_record_user(js_keycode, &record);
-                    // process_action(&record, action_for_keycode(js_keycode));
                 }
                 had_js_event = false;
             }
         }
+        /**
+                record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
+                js_keycode = LOL;
+                process_record_user(js_keycode, &record);
+                had_js_event = true;
+                */
     }
 
     if (new_sw_state != sw_state) {
@@ -144,19 +146,75 @@ void matrix_scan_user(void) {
 }
 
 
-void           pointing_device_driver_init(void) {}
+int8_t last_report_x = 0;
+int8_t last_report_y = 0;
+void pointing_device_driver_init(void) {}
+
+int8_t clamp(int v) {
+    if (v > 127) {
+        return 127;
+    }
+
+    if (v < -127) {
+        return -127;
+    }
+
+    return (int8_t)v;
+}
+
+#define RESOLUTION 50
+uint8_t tick;
 report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
     if (enable_mouse) {
-        int xval = ((x - 507) / 2);
+        int xval = x - 507;
+        if (x < 0) {
+            x -= 1;
+        }
+        xval *= -1;
+        xval /= 32;
+
+        int yval = (y - 514) / 32;
+
+        int8_t new_xreport = clamp(xval);
+        int8_t new_yreport = clamp(yval);
+
         mouse_report.h = 0;
         mouse_report.v = 0;
-        mouse_report.x = xval == 0 ? 0 : ((x > 0) ? -1 : 1);
-        mouse_report.y = y == 514 ? 0 : ((y > 514) ? 1 : -1);
+        mouse_report.x = new_xreport;
+        mouse_report.y = new_yreport;
+
+    }
+
+    // TODO use timers/timer_read instead
+    tick += 1;
+    tick %= RESOLUTION;
+    if (tick != 0) {
+        mouse_report.x = 0;
+        mouse_report.y = 0;
+    } else {
+        if (mouse_report.x != 0) {
+            if (mouse_report.x > last_report_x) {
+                mouse_report.x = last_report_x + 1;
+            } else if (mouse_report.x < last_report_x) {
+                mouse_report.x = last_report_x - 1;
+            }
+        }
+
+        if (mouse_report.y != 0) {
+            if (mouse_report.y > last_report_y) {
+                mouse_report.y = last_report_y + 1;
+            } else if (mouse_report.y < last_report_y) {
+                mouse_report.y = last_report_y - 1;
+            }
+        }
+
+        last_report_x = mouse_report.x;
+        last_report_y = mouse_report.y;
     }
 
     return mouse_report;
 }
-uint16_t       pointing_device_driver_get_cpi(void) { return 1; }
+uint16_t       pointing_device_driver_get_cpi(void) { return 100; }
 void           pointing_device_driver_set_cpi(uint16_t cpi) {}
 
 bool process_record_user(uint16_t keycode, keyrecord_t *record) {
@@ -167,7 +225,7 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         if (record->event.pressed) {
             // when keycode QMKBEST is pressed
             //SEND_STRING("QMK is the best thing ever!")
-            if (sprintf(string, "x: %d, y: %d s: %d", x, y, sw_state) > 0)
+            if (sprintf(string, "x: %d y: %d s: %d\n", x, y, sw_state) > 0)
                 send_string(string);
         } else {
             // when keycode QMKBEST is released
