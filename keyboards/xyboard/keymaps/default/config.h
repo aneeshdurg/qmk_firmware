@@ -35,3 +35,4 @@
 #    endif
 #endif
 
+#define SPLIT_TRANSACTION_IDS_USER RPC_GET_JOYSTICK_STATE

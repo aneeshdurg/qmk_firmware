@@ -14,6 +14,11 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #include QMK_KEYBOARD_H
+#include "quantum.h"
+#include "analog.h"
+#include "transactions.h"
+
+
 
 enum layers {
     _QWERTY = 0,
@@ -26,7 +31,7 @@ enum layers {
 };
 
 enum custom_keys {
-    LOL = SAFE_RANGE,
+    DEBUG_JS = SAFE_RANGE,
 };
 
 // Aliases for readability
@@ -67,7 +72,7 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [_QWERTY] = LAYOUT(
      KC_TAB  , KC_Q ,  KC_W   ,  KC_E  ,   KC_R ,   KC_T ,                                        KC_Y,   KC_U ,  KC_I ,   KC_O ,  KC_P , KC_BSPC,
      CTL_ESC , KC_A ,  KC_S   ,  KC_D  ,   KC_F ,   KC_G ,                                        KC_H,   KC_J ,  KC_K ,   KC_L ,KC_SCLN,CTL_QUOT,
-     KC_LSFT , KC_Z ,  KC_X   ,  KC_C  ,   KC_V ,   KC_B , KC_LBRC, LOL ,     FKEYS  , KC_RBRC, KC_N,   KC_M ,KC_COMM, KC_DOT ,KC_SLSH, KC_RSFT,
+     KC_LSFT , KC_Z ,  KC_X   ,  KC_C  ,   KC_V ,   KC_B , KC_LBRC, DEBUG_JS ,     FKEYS  , KC_RBRC, KC_N,   KC_M ,KC_COMM, KC_DOT ,KC_SLSH, KC_RSFT,
                                 ADJUST , KC_LGUI, ALT_ENT, KC_SPC , NAV   ,     SYM    , KC_SPC ,KC_RALT, KC_RGUI, KC_APP
     ),
 
@@ -93,55 +98,94 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 //     ),
 };
 
-#include "quantum.h"
-#include "analog.h"
-void matrix_init_user(void) {
+typedef struct _rpc_req { } rpc_req;
+
+typedef struct _rpc_resp {
+    int slave_x;
+    int slave_y;
+    bool slave_sw;
+} rpc_resp;
+
+
+void keyboard_pre_init_user(void) {
     // Select button on joystick
     setPinInputHigh(C7);
 }
 
-int x, y;
-int sw_state = false;
+void get_joystick_state_handler(uint8_t in_buflen, const void* in_data, uint8_t out_buflen, void* out_data) {
+    // const rpc_req *req = (const rpc_req*)in_data;
+    rpc_resp *resp = (rpc_resp*)out_data;
+
+    int x = analogReadPin(F0);
+    int y = analogReadPin(F1);
+    // int new_sw_state = readPin(C7);
+
+    resp->slave_x = x;
+    resp->slave_y = y;
+    resp->slave_sw = readPin(C7);
+}
+
+void keyboard_post_init_user(void) {
+    transaction_register_rpc(RPC_GET_JOYSTICK_STATE, get_joystick_state_handler);
+}
+
+
+typedef struct {
+    int x;
+    int y;
+    bool sw;
+} joystick_state;
+
+joystick_state state_left;
+joystick_state state_right;
 keyrecord_t record;
 uint16_t js_keycode;
 bool had_js_event = false;
 bool enable_mouse = true;
+
+const int left_center_x = 514;
+const int left_center_y = 508;
+const int right_center_x = 511;
+const int right_center_y = 504;
+
 void matrix_scan_user(void) {
-    int new_x = analogReadPin(F0);
-    int new_y = analogReadPin(F1);
-    int new_sw_state = readPin(C7);
-
-    if (x != new_x || y != new_y) {
-        x = new_x;
-        y = new_y;
-
-        if (!enable_mouse) {
-            if (x == 0 && y == 0) {
-                record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
-                js_keycode = LOL;
-                process_record_user(js_keycode, &record);
-                had_js_event = true;
-            } else if (x == 507 && y == 514) {
-                if (had_js_event) {
-                    record.event.pressed = false;
-                    process_record_user(js_keycode, &record);
-                }
-                had_js_event = false;
-            }
-        }
-        /**
-                record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
-                js_keycode = LOL;
-                process_record_user(js_keycode, &record);
-                had_js_event = true;
-                */
+    if (!is_keyboard_master()) {
+        return;
     }
 
-    if (new_sw_state != sw_state) {
-        sw_state = new_sw_state;
-        if (sw_state == 0) {
-            enable_mouse = !enable_mouse;
+    joystick_state new_left = {analogReadPin(F0), analogReadPin(F1), !!readPin(C7)};
+    if (state_left.x != new_left.x || state_left.y != new_left.y) {
+        state_left.x = new_left.x;
+        state_left.y = new_left.y;
+        state_left.sw = new_left.sw;
+        if (state_left.x == 0 && state_left.y == 0) {
+            record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
+            js_keycode = DEBUG_JS;
+            process_record_user(js_keycode, &record);
+            had_js_event = true;
+        } else if (state_left.x == 507 && state_left.y == 514) {
+            if (had_js_event) {
+                record.event.pressed = false;
+                process_record_user(js_keycode, &record);
+            }
+            had_js_event = false;
         }
+    }
+
+
+    joystick_state new_right = {0, 0, false};
+    if (transaction_rpc_exec(RPC_GET_JOYSTICK_STATE, sizeof(joystick_state), &state_left, sizeof(joystick_state), &new_right)) {
+        if (!enable_mouse) {
+        }
+        if (state_right.sw != new_right.sw) {
+            if (!new_right.sw) {
+                enable_mouse = !enable_mouse;
+            }
+        }
+
+        state_right.x = new_right.x;
+        state_right.y = new_right.y;
+        state_right.sw = new_right.sw;
     }
 }
 
@@ -166,14 +210,11 @@ int8_t clamp(int v) {
 uint8_t tick;
 report_mouse_t pointing_device_driver_get_report(report_mouse_t mouse_report) {
     if (enable_mouse) {
-        int xval = x - 507;
-        if (x < 0) {
-            x -= 1;
-        }
+        int xval = state_right.x - 507;
         xval *= -1;
         xval /= 32;
 
-        int yval = (y - 514) / 32;
+        int yval = (state_right.y - 514) / 32;
 
         int8_t new_xreport = clamp(xval);
         int8_t new_yreport = clamp(yval);
@@ -221,14 +262,21 @@ bool process_record_user(uint16_t keycode, keyrecord_t *record) {
     char string[100];
 
     switch (keycode) {
-    case LOL:
+    case DEBUG_JS:
         if (record->event.pressed) {
-            // when keycode QMKBEST is pressed
-            //SEND_STRING("QMK is the best thing ever!")
-            if (sprintf(string, "x: %d y: %d s: %d\n", x, y, sw_state) > 0)
+            if (sprintf(
+                string,
+                "x: %d y: %d s: %d r_x: %d r_y: %d r_s: %d\n",
+                state_left.x,
+                state_left.y,
+                state_left.sw,
+                state_right.x,
+                state_right.y,
+                state_right.sw
+            ) > 0)
                 send_string(string);
         } else {
-            // when keycode QMKBEST is released
+            // when keycode DEBUG_JS is released
         }
         break;
     }
