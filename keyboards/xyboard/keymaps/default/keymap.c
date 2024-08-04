@@ -34,11 +34,11 @@ enum custom_keys {
 
 // Aliases for readability
 #define QWERTY DF(_QWERTY)
-#define LOWER DF(_LOWER)
-#define UPPER DF(_UPPER)
+#define LOWER MO(_LOWER)
+#define UPPER MO(_UPPER)
 
 #define CTL_QUOT MT(MOD_RCTL, KC_QUOTE)
-#define CTL_MINS MT(MOD_RCTL, KC_MINUS)
+#define SHFT_ESC MT(MOD_RSFT, KC_ESC)
 
 // Note: LAlt/Enter (ALT_ENT) is not the same thing as the keyboard shortcut Alt+Enter.
 // The notation `mod/tap` denotes a key that activates the modifier `mod` when held down, and
@@ -63,14 +63,14 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     [_QWERTY] = LAYOUT(
      KC_ESC, KC_Q ,  KC_W   ,  KC_E  ,   KC_R ,   KC_T ,                                             KC_Y,   KC_U ,  KC_I ,   KC_O ,  KC_P , KC_BSPC,
      KC_LSFT , KC_A ,  KC_S   ,  KC_D  ,   KC_F ,   KC_G ,                                           KC_H,   KC_J ,  KC_K ,   KC_L ,KC_SCLN,CTL_QUOT,
-     KC_LCTL, KC_Z ,  KC_X   ,  KC_C  ,   KC_V ,   KC_B , JSK,   KC_LGUI,        KC_LALT  , JSK,     KC_N,   KC_M ,KC_COMM, KC_DOT ,KC_SLSH, KC_RSFT,
+     KC_LCTL, KC_Z ,  KC_X   ,  KC_C  ,   KC_V ,   KC_B , JSK,   KC_LGUI,        KC_LALT  , JSK,     KC_N,   KC_M ,KC_COMM, KC_DOT ,KC_SLSH, SHFT_ESC,
                                 KC_LEFT , KC_RIGHT, KC_GRAVE, KC_SPC, KC_HOME,   KC_END   , KC_ENT,  UPPER, KC_UP , KC_DOWN
     ),
 
     [_UPPER] = LAYOUT(
      KC_TAB,   KC_1 ,  KC_2  ,  KC_3  ,   KC_4 ,   KC_5 ,                                               KC_6   , KC_7   , KC_8   , KC_9   , KC_0   , KC_MINS,
-     _______, _______, KC_MPRV, KC_MNXT, KC_VOLU, KC_LBRC,                                      KC_RBRC, _______, _______, _______, KC_EQL , _______,
-     _______, _______, KC_MPLY, KC_MUTE, KC_VOLD, _______, _______, _______,  _______, _______, _______, _______, _______, _______, _______, _______,
+     _______, _______, KC_MPRV, KC_MNXT, KC_VOLU, KC_LBRC,                                      KC_RBRC, _______, _______, _______, KC_EQL , KC_MINS,
+     _______, _______, KC_MPLY, KC_MUTE, KC_VOLD, _______, _______, _______,  _______, _______, _______, _______, _______, _______, KC_BSLS, _______,
                                 _______, _______, _______, _______, _______,  _______, _______, _______, _______, _______
     ),
 
@@ -134,6 +134,58 @@ const int left_center_y = 508;
 const int right_center_x = 511;
 const int right_center_y = 504;
 
+typedef enum _custom_event_type {
+    ENABLE_LAYER,
+    CUSTOM_KEYCODE,
+    NORMAL_KEYCODE,
+} custom_event_type_t;
+
+typedef struct _custom_event {
+    custom_event_type_t type;
+    union {
+        uint16_t data16;
+        uint8_t data8;
+    };
+} custom_event_t;
+
+void execute_action(custom_event_t* evt) {
+    switch (evt->type) {
+        case ENABLE_LAYER: {
+            layer_on(evt->data16);
+            return;
+        }
+        case CUSTOM_KEYCODE: {
+            record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
+            record.event.pressed = true;
+            process_record_user(evt->data16, &record);
+            return;
+        }
+        case NORMAL_KEYCODE: {
+            register_code(evt->data8);
+            return;
+        }
+    }
+}
+
+void unexecute_action(custom_event_t* evt) {
+    switch (evt->type) {
+        case ENABLE_LAYER: {
+            layer_off(evt->data16);
+            return;
+        }
+        case CUSTOM_KEYCODE: {
+            record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
+            record.event.pressed = false;
+            process_record_user(evt->data16, &record);
+            return;
+        }
+        case NORMAL_KEYCODE: {
+            unregister_code(evt->data8);
+            return;
+        }
+    }
+}
+
 void matrix_scan_user(void) {
     if (!is_keyboard_master()) {
         return;
@@ -149,7 +201,7 @@ void matrix_scan_user(void) {
             js_keycode = DEBUG_JS;
             process_record_user(js_keycode, &record);
             had_js_event = true;
-        } else if (state_left.x == 507 && state_left.y == 514) {
+        } else if (state_left.x == 508 && state_left.y == 514) {
             if (had_js_event) {
                 record.event.pressed = false;
                 process_record_user(js_keycode, &record);
@@ -161,14 +213,28 @@ void matrix_scan_user(void) {
 
     joystick_state new_right = {0, 0, false};
     if (transaction_rpc_exec(RPC_GET_JOYSTICK_STATE, sizeof(joystick_state), &state_left, sizeof(joystick_state), &new_right)) {
-        if (!enable_mouse) {
-        }
         if (state_right.sw != new_right.sw) {
             if (!new_right.sw) {
                 enable_mouse = !enable_mouse;
             }
         }
 
+        if (state_right.x != new_right.x || state_right.y != new_right.y) {
+            if (!enable_mouse) {
+                if (state_right.x == 0 && state_right.y == 0) {
+                    record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
+                    js_keycode = DEBUG_JS;
+                    process_record_user(js_keycode, &record);
+                    had_js_event = true;
+                } else if (state_right.x == 511 && state_right.y == 504) {
+                    if (had_js_event) {
+                        record.event.pressed = false;
+                        process_record_user(js_keycode, &record);
+                    }
+                    had_js_event = false;
+                }
+            }
+        }
         state_right.x = new_right.x;
         state_right.y = new_right.y;
         state_right.sw = new_right.sw;
