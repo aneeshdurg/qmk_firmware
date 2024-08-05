@@ -18,12 +18,11 @@
 #include "analog.h"
 #include "transactions.h"
 
-
-
 enum layers {
     _QWERTY = 0,
     _LOWER,
     _UPPER,
+    _FUNCTION,
 };
 
 enum custom_keys {
@@ -74,6 +73,13 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
                                 _______, _______, _______, _______, _______,  _______, _______, _______, _______, _______
     ),
 
+    [_FUNCTION] = LAYOUT(
+     KC_A  ,   KC_1 ,  KC_2  ,  KC_3  ,   KC_4 ,   KC_5 ,                                               KC_6   , KC_7   , KC_8   , KC_9   , KC_0   , KC_MINS,
+     _______, _______, KC_MPRV, KC_MNXT, KC_VOLU, KC_LBRC,                                      KC_RBRC, _______, _______, _______, KC_EQL , KC_MINS,
+     _______, _______, KC_MPLY, KC_MUTE, KC_VOLD, _______, _______, _______,  _______, _______, _______, _______, _______, _______, KC_BSLS, _______,
+                                _______, _______, _______, _______, _______,  _______, _______, _______, _______, _______
+    ),
+
 // /*
 //  * Layer template
 //  *
@@ -107,14 +113,16 @@ void keyboard_pre_init_user(void) {
     setPinInputHigh(C7);
 }
 
+void get_local_joystick_state(joystick_state* out_data) {
+    out_data->x = analogReadPin(F0);
+    out_data->y = analogReadPin(F1);
+    out_data->sw = readPin(C7);
+}
+
 // Send data from the right half to the left
 void get_joystick_state_handler(uint8_t in_buflen, const void* in_data, uint8_t out_buflen, void* out_data) {
     // const rpc_req *req = (const rpc_req*)in_data;
-    joystick_state *resp = (joystick_state*)out_data;
-
-    resp->x = analogReadPin(F0);
-    resp->y = analogReadPin(F1);
-    resp->sw = readPin(C7);
+    get_local_joystick_state((joystick_state*)out_data);
 }
 
 void keyboard_post_init_user(void) {
@@ -135,6 +143,7 @@ const int right_center_x = 511;
 const int right_center_y = 504;
 
 typedef enum _custom_event_type {
+    NONE,
     ENABLE_LAYER,
     CUSTOM_KEYCODE,
     NORMAL_KEYCODE,
@@ -144,14 +153,18 @@ typedef struct _custom_event {
     custom_event_type_t type;
     union {
         uint16_t data16;
+        enum layers layer;
         uint8_t data8;
     };
 } custom_event_t;
 
 void execute_action(custom_event_t* evt) {
     switch (evt->type) {
+        case NONE: {
+           return;
+       }
         case ENABLE_LAYER: {
-            layer_on(evt->data16);
+            layer_on(evt->layer);
             return;
         }
         case CUSTOM_KEYCODE: {
@@ -168,9 +181,15 @@ void execute_action(custom_event_t* evt) {
 }
 
 void unexecute_action(custom_event_t* evt) {
-    switch (evt->type) {
+    custom_event_type_t type = evt->type;
+    // Clear the event state
+    evt->type = NONE;
+    switch (type) {
+        case NONE: {
+           return;
+       }
         case ENABLE_LAYER: {
-            layer_off(evt->data16);
+            layer_off(evt->layer);
             return;
         }
         case CUSTOM_KEYCODE: {
@@ -186,58 +205,75 @@ void unexecute_action(custom_event_t* evt) {
     }
 }
 
+custom_event_t left_event = { .type = NONE };
+custom_event_t right_event = { .type = NONE };
+
+void process_left_joystick(joystick_state* new_left) {
+    if (state_left.x != new_left->x || state_left.y != new_left->y) {
+        unexecute_action(&left_event);
+
+        state_left.x = new_left->x;
+        state_left.y = new_left->y;
+        state_left.sw = new_left->sw;
+        if (state_left.x == 0 && state_left.y == 0) {
+            left_event = (custom_event_t){
+                .type = CUSTOM_KEYCODE,
+                .data16 = DEBUG_JS,
+            };
+        } else if (state_left.x == 1023 && state_left.y == 1023) {
+            left_event = (custom_event_t){
+                .type = ENABLE_LAYER,
+                .layer = _FUNCTION,
+            };
+        }
+
+        execute_action(&left_event);
+    }
+}
+
+void process_right_joystick(joystick_state* new_right) {
+    if (state_right.sw != new_right->sw) {
+        if (!new_right->sw) {
+            enable_mouse = !enable_mouse;
+        }
+    }
+
+    if (state_right.x != new_right->x || state_right.y != new_right->y) {
+        if (right_event.type != NONE) {
+            // need to unexecute just in case we enabled the mouse on this
+            // call.
+            unexecute_action(&right_event);
+        }
+        if (!enable_mouse) {
+            if (state_right.x == 0 && state_right.y == 0) {
+                right_event = (custom_event_t){
+                    .type = CUSTOM_KEYCODE,
+                    .data16 = DEBUG_JS,
+                };
+            }
+            execute_action(&right_event);
+        }
+    }
+    state_right.x = new_right->x;
+    state_right.y = new_right->y;
+    state_right.sw = new_right->sw;
+}
+
 void matrix_scan_user(void) {
     if (!is_keyboard_master()) {
         return;
     }
 
-    joystick_state new_left = {analogReadPin(F0), analogReadPin(F1), !!readPin(C7)};
-    if (state_left.x != new_left.x || state_left.y != new_left.y) {
-        state_left.x = new_left.x;
-        state_left.y = new_left.y;
-        state_left.sw = new_left.sw;
-        if (state_left.x == 0 && state_left.y == 0) {
-            record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
-            js_keycode = DEBUG_JS;
-            process_record_user(js_keycode, &record);
-            had_js_event = true;
-        } else if (state_left.x == 508 && state_left.y == 514) {
-            if (had_js_event) {
-                record.event.pressed = false;
-                process_record_user(js_keycode, &record);
-            }
-            had_js_event = false;
-        }
-    }
-
+    joystick_state new_left;
+    get_local_joystick_state(&new_left);
+    process_left_joystick(&new_left);
 
     joystick_state new_right = {0, 0, false};
-    if (transaction_rpc_exec(RPC_GET_JOYSTICK_STATE, sizeof(joystick_state), &state_left, sizeof(joystick_state), &new_right)) {
-        if (state_right.sw != new_right.sw) {
-            if (!new_right.sw) {
-                enable_mouse = !enable_mouse;
-            }
-        }
-
-        if (state_right.x != new_right.x || state_right.y != new_right.y) {
-            if (!enable_mouse) {
-                if (state_right.x == 0 && state_right.y == 0) {
-                    record.event = MAKE_EVENT(0, 0, true, KEY_EVENT);
-                    js_keycode = DEBUG_JS;
-                    process_record_user(js_keycode, &record);
-                    had_js_event = true;
-                } else if (state_right.x == 511 && state_right.y == 504) {
-                    if (had_js_event) {
-                        record.event.pressed = false;
-                        process_record_user(js_keycode, &record);
-                    }
-                    had_js_event = false;
-                }
-            }
-        }
-        state_right.x = new_right.x;
-        state_right.y = new_right.y;
-        state_right.sw = new_right.sw;
+    bool rpc_success = transaction_rpc_exec(
+        RPC_GET_JOYSTICK_STATE, sizeof(joystick_state), &state_left,
+        sizeof(joystick_state), &new_right);
+    if (rpc_success) {
+        process_right_joystick(&new_right);
     }
 }
 
